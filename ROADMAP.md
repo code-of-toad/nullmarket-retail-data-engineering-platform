@@ -503,11 +503,11 @@ Connect the local repository and push `main`.
 Verify:
 
 - [x] Local Git repository exists.
-- [X] GitHub repository exists.
+- [x] GitHub repository exists.
 - [x] `main` is the default branch.
-- [X] `.gitignore` is configured.
+- [x] `.gitignore` is configured.
 - [x] No secrets are tracked.
-- [X] Initial commit has been pushed.
+- [x] Initial commit has been pushed.
 
 ---
 
