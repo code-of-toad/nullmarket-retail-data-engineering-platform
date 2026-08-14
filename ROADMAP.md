@@ -563,11 +563,11 @@ Document requirements for:
 
 Be able to explain:
 
-- [ ] What business problem the pipeline solves.
-- [ ] Who consumes the resulting data.
-- [ ] Why the five source datasets are required.
-- [ ] Which analytical questions the warehouse supports.
-- [ ] Which engineering qualities the system prioritizes.
+- [x] What business problem the pipeline solves.
+- [x] Who consumes the resulting data.
+- [x] Why the five source datasets are required.
+- [x] Which analytical questions the warehouse supports.
+- [x] Which engineering qualities the system prioritizes.
 
 ---
 
