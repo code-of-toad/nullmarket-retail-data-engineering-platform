@@ -1,0 +1,70 @@
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Environment variables / secrets
+.env
+.env.*
+*.pem
+*.key
+credentials/
+secrets/
+
+# Google Cloud credentials
+service-account*.json
+application_default_credentials.json
+
+# Spark local artifacts
+.sparkStaging/
+metastore_db/
+derby.log
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE / editor settings
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Generated data
+data/raw/
+data/processed/
+data/curated/
+data/rejected/
+data/generated/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# Local configuration overrides
+config/local.yaml
+config/local.yml
+
+# Optional local GCP / CLI state
+.gcloud/
