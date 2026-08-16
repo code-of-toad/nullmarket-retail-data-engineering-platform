@@ -1,0 +1,9 @@
+store_id,store_name,city,province,region,store_type,open_date
+S0001,NullMarket Toronto,Toronto,Ontario,Central,Urban,2012-07-01
+S0002,NullMarket Mississauga,Mississauga,Ontario,Central,Urban,2016-03-03
+S0003,NullMarket Ottawa,Ottawa,Ontario,Central,Urban,2015-01-03
+S0004,NullMarket Montreal,Montreal,Quebec,East,Compact,2012-04-19
+S0005,NullMarket Quebec City,Quebec City,Quebec,East,Urban,2022-03-26
+S0006,NullMarket Vancouver,Vancouver,British Columbia,West,Suburban,2023-03-31
+S0007,NullMarket Victoria,Victoria,British Columbia,West,Urban,2010-09-18
+S0008,NullMarket Calgary,Calgary,Alberta,West,Urban,2012-02-07

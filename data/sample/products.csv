@@ -1,0 +1,10 @@
+product_id,product_name,category,subcategory,brand,unit_cost,list_price,active_flag
+P00001,Harbour Audio 001,Electronics,Audio,Harbour,99.04,153.51,True
+P00002,MapleWorks Pantry 002,Grocery,Pantry,MapleWorks,116.88,203.37,True
+P00003,MapleWorks Beverages 003,Grocery,Beverages,MapleWorks,127.59,207.97,True
+P00004,Northline Kitchen 004,Home,Kitchen,Northline,61.31,100.55,True
+P00005,Northline Personal Care 005,Health & Beauty,Personal Care,Northline,122.05,217.25,True
+P00006,Harbour Wellness 006,Health & Beauty,Wellness,Harbour,15.41,29.28,True
+P00007,Summit Outerwear 007,Apparel,Outerwear,Summit,147.57,244.97,True
+P00008,Northline Accessories 008,Apparel,Accessories,Northline,10.00,20.40,True
+P00001,Harbour Audio 001,Electronics,Audio,Harbour,99.04,153.51,True

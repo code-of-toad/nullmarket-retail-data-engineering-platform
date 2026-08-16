@@ -1,0 +1,9 @@
+order_id,customer_id,store_id,order_timestamp,order_status,payment_method,channel
+O000001,C00066,S0001,2026-03-15 11:27:37,Cancelled,Debit Card,Store
+O000002,,S0012,2026-03-08 17:48:07,Cancelled,Digital Wallet,Store
+O000003,C00018,S0011,not-a-timestamp,Pending,Digital Wallet,Online
+O000004,C00077,S0009,2026-03-26 10:16:07,Pending,Digital Wallet,Online
+O000005,C00179,S0005,2026-02-11 15:19:31,Cancelled,Credit Card,Store
+O000006,C00174,S0012,2026-02-23 14:54:07,Completed,Digital Wallet,Online
+O000007,C00001,S0005,2026-02-21 17:58:29,Pending,Credit Card,Online
+O000008,C00168,S0006,2026-03-16 19:02:38,Pending,Debit Card,Online
