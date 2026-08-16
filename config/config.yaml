@@ -1,0 +1,18 @@
+application:
+  name: NullMarket
+
+environment: local
+
+paths:
+  raw: data/raw
+  curated: data/curated
+  rejected: data/rejected
+
+gcp:
+  project_id: null
+  gcs:
+    raw_uri: null
+    curated_uri: null
+    rejected_uri: null
+  bigquery:
+    dataset: null
