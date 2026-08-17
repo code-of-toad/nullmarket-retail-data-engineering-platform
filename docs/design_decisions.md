@@ -149,3 +149,243 @@ The NullMarket demonstration dataset is small, so this project does not claim
 measured query-performance or cost improvements from partitioning or
 clustering. The implementation demonstrates a defensible BigQuery physical
 design pattern that becomes more relevant as warehouse volume increases.
+
+---
+
+## Phase 17 — Idempotency and Incremental Processing
+
+### Decision: Keep the validated full-refresh path and add a batch-scoped incremental path
+
+NullMarket retains its existing full-refresh processing while adding a separate deterministic incremental batch for new transactional and inventory data.
+
+**Rationale**
+
+- Idempotency and incremental processing solve different problems: a full refresh proves the complete dataset can be rebuilt safely, while an incremental load avoids unnecessary reprocessing of unchanged history.
+- Keeping a known-good full-refresh path provides a reconciliation baseline for incremental testing.
+- Batch-specific raw and curated prefixes make the new input/output boundary explicit and keep incremental evidence separate from historical curated data.
+
+**Implemented outcome**
+
+- Repeating the full-refresh process with identical input did not create unintended duplicate business records.
+- Phase 17 generated a deterministic subsequent batch containing new orders, order items, and inventory snapshots.
+- The new batch was processed locally and with Managed Spark using batch-scoped GCS paths.
+- Historical Phase 16 curated Parquet remained available as an untouched reconciliation baseline.
+
+### Decision: Reuse existing product/store reference data and preserve surrogate-key mappings
+
+The incremental batch contains new transactional/snapshot records but does not regenerate product or store reference entities.
+
+**Rationale**
+
+- `fact_sales` and `fact_inventory_snapshot` depend on stable dimension-key mappings.
+- Rebuilding surrogate keys independently for each incremental batch could cause the same source business key to point to a different warehouse key.
+- Existing product and store reference data already represents the accepted current dimension population needed by the new facts.
+
+**Implemented outcome**
+
+Phase 17 explicitly validated that existing product and store business keys retained the same surrogate-key mappings while new fact rows were produced.
+
+### Decision: Use deterministic business keys with insert-only BigQuery MERGE for incremental ingestion
+
+Incremental warehouse loads use deterministic business uniqueness rather than unconditional append behavior.
+
+Relevant business keys are:
+
+```text
+fact_sales:
+(order_id, line_number)
+
+fact_inventory_snapshot:
+(snapshot_date, store_key, product_key)
+```
+
+**Rationale**
+
+- A plain append would duplicate rows if the same batch were retried.
+- The current incremental demonstration contains new records and does not implement change capture for updates to existing historical facts.
+- Insert-only `MERGE` therefore matches the implemented requirement: insert a business record only when its key is not already present.
+
+**Implemented outcome**
+
+The same incremental BigQuery load was retried and did not produce duplicate warehouse rows.
+
+### Decision: Treat historical and incremental reconciliation as separate correctness checks
+
+Phase 17 validates both the preserved history and the newly added records.
+
+**Rationale**
+
+A final warehouse row count alone cannot prove an incremental load is correct. A faulty implementation could preserve the expected total while mutating old rows, duplicating some keys, or changing measures.
+
+**Implemented outcome**
+
+Validation separately established that:
+
+- historical warehouse data reconciled exactly with the untouched Phase 16 curated Parquet;
+- new warehouse records reconciled exactly with the Phase 17 incremental Parquet;
+- duplicate business keys were zero;
+- orphan relationships were zero;
+- business-date mismatches were zero;
+- sales-measure mismatches were zero;
+- low-stock mismatches were zero;
+- existing BigQuery partitioning and clustering were preserved.
+
+---
+
+## Phase 18 — Consolidated Implemented Architecture Decisions
+
+Phase 18 does not introduce a new runtime component. It documents the engineering decisions already implemented in Phases 1–17.
+
+### Why Apache Spark / PySpark?
+
+**Implemented decision**
+
+NullMarket uses PySpark DataFrames as the main transformation engine locally and in Google-managed Spark.
+
+**Rationale**
+
+- The roadmap requires practical distributed data-processing patterns rather than a pipeline tied only to in-memory single-process transformations.
+- Spark provides the DataFrame operations, joins, aggregations, window functions, partition concepts, broadcast joins, and execution-plan inspection required by the project.
+- The same transformation functions can operate on local files or GCS-backed DataFrames without duplicating business logic.
+
+**Boundary**
+
+The demonstration dataset is small. NullMarket demonstrates Spark engineering patterns and managed execution; it does not claim that Spark was required by the measured data volume or that enterprise-scale throughput was benchmarked.
+
+### Why explicit schemas?
+
+**Implemented decision**
+
+Every operational source is read with an explicit PySpark `StructType` schema.
+
+**Rationale**
+
+- Source types are part of the data contract and should not depend on inference from a particular file sample.
+- Explicit types preserve fixed-precision decimal handling for currency and consistent date/timestamp parsing.
+- Malformed typed values can be exposed to the validation layer rather than silently changing the inferred schema.
+- Stable schemas make transformations and automated tests more reproducible.
+
+### Why separate raw, rejected, and curated states?
+
+**Implemented decision**
+
+NullMarket keeps raw source data, rejected records, and curated analytical output logically separate in storage.
+
+**Rationale**
+
+- Raw data preserves the ingested source representation for reprocessing.
+- Rejected storage makes data-quality failures inspectable instead of silently discarding them.
+- Curated storage contains only validated and transformed warehouse-shaped datasets intended for downstream analytical loading.
+- Separating these states makes trust boundaries and troubleshooting clearer.
+
+### Why Parquet for the curated layer?
+
+**Implemented decision**
+
+The five curated analytical datasets are persisted as Parquet.
+
+**Rationale**
+
+- Parquet is columnar and suited to analytical reads that select subsets of columns.
+- It preserves typed schemas better than CSV.
+- It supports compression and Spark optimizations such as predicate pushdown.
+- Persisted Parquet can be read back and independently validated before warehouse loading.
+
+### Why dimensional modeling?
+
+**Implemented decision**
+
+The warehouse uses conformed `dim_date`, `dim_product`, and `dim_store` dimensions shared by separate sales and inventory fact tables.
+
+**Rationale**
+
+- Product, store, and date attributes provide reusable analytical context for grouping, filtering, and ranking measures.
+- Shared dimensions provide consistent business definitions across facts.
+- Separate facts prevent sales transactions and inventory snapshot state from being mixed at incompatible grains.
+
+### Why `fact_sales` uses order-line grain
+
+**Implemented decision**
+
+`fact_sales` contains one row per validated `(order_id, line_number)`.
+
+**Rationale**
+
+Quantity, unit price, discount, product identity, and gross margin are defined at the order-line level. Aggregating to one row per order would lose product-level analytical detail and make the documented line-level measures unavailable.
+
+### Why `fact_inventory_snapshot` uses date/store/product grain
+
+**Implemented decision**
+
+`fact_inventory_snapshot` contains one row per product, per store, per snapshot date.
+
+**Rationale**
+
+Inventory is point-in-time state rather than a transaction. The snapshot grain preserves historical observations while preventing repeated inventory states from being treated as additive transactions across dates.
+
+### Why the curated Parquet partition strategy is selective
+
+**Implemented decision**
+
+`fact_inventory_snapshot` is physically partitioned by `date_key` in the curated Parquet layer, while `fact_sales` is not physically date-partitioned for the current demonstration dataset.
+
+**Rationale**
+
+- The inventory dataset has a small number of snapshot dates, so the layout provides a defensible low-cardinality date-partitioning demonstration.
+- The small sales fact is spread across many dates; partitioning it by date would create many tiny directories/files and illustrate the small-file problem rather than good physical design.
+
+**Boundary**
+
+This is a layout decision, not a measured performance-improvement claim.
+
+### Why BigQuery partitions by business date
+
+**Implemented decision**
+
+- `fact_sales` is partitioned by `order_date`.
+- `fact_inventory_snapshot` is partitioned by `snapshot_date`.
+
+**Rationale**
+
+The documented analytical questions are time-oriented, so business dates are more useful analytical partition boundaries than ingestion time for this warehouse.
+
+### Why BigQuery clustering uses product/store keys
+
+**Implemented decision**
+
+- `fact_sales`: `product_key`, then `store_key`.
+- `fact_inventory_snapshot`: `store_key`, then `product_key`.
+
+**Rationale**
+
+Sales requirements repeatedly group/filter by product/category and store, while inventory requirements focus on store/product availability and low-stock combinations. The cluster columns support those access patterns without denormalizing dimension attributes such as category into facts solely for physical optimization.
+
+**Boundary**
+
+The demonstration dataset is too small to support defensible claims of measured BigQuery cost or performance savings.
+
+### How failures are handled
+
+**Implemented decision**
+
+NullMarket uses explicit failure paths at multiple layers rather than treating a completed process as sufficient proof of correctness.
+
+**Implemented mechanisms**
+
+- invalid source records are placed in rejected output with validation reasons;
+- grain and row-count guards detect accidental multiplication or row loss;
+- sales measures are independently reconciled from accepted source data;
+- Parquet outputs are read back and compared with in-memory curated results;
+- Managed Spark job state, logs, and Spark UI execution metadata are inspectable;
+- BigQuery validation SQL checks uniqueness, relationships, dates, and measures;
+- incremental BigQuery `MERGE` prevents duplicate inserts when a batch is retried.
+
+An external orchestrator, centralized alerting, and automated production retry policy are not implemented.
+
+### How the current design could scale without claiming production scale
+
+The implemented architecture already uses technologies and patterns that support larger workloads conceptually: distributed Spark execution, Parquet, partition-aware data layouts, broadcast-join awareness, execution-plan inspection, incremental processing, and BigQuery partitioning/clustering.
+
+At substantially higher volume, the same design would require additional engineering decisions such as partition/file sizing, shuffle reduction, skew mitigation, more deliberate broadcast thresholds, monitoring, automated retries, orchestration, and operational controls.
+
+These are scalability and productionization considerations only. NullMarket has not benchmarked enterprise-scale throughput, cost savings, or production reliability, and Phase 18 does not add those capabilities.
