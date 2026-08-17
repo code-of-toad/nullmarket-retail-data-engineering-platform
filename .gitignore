@@ -68,3 +68,6 @@ config/local.yml
 
 # Optional local GCP / CLI state
 .gcloud/
+data/incremental/phase17_batch_01/inventory_snapshots/inventory_snapshots.csv
+data/incremental/phase17_batch_01/order_items/order_items.csv
+data/incremental/phase17_batch_01/orders/orders.csv
