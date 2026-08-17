@@ -1,18 +1,37 @@
+# NullMarket central configuration.
+# Environment-specific storage locations live here so transformation logic does
+# not need separate local-vs-cloud implementations.
+
 application:
   name: NullMarket
 
+# Phase 14 remains a local execution environment.
+# Phase 15 will adapt pipeline orchestration to select GCS paths for cloud runs.
 environment: local
 
 paths:
+  # Local paths remain authoritative for the existing local pipeline.
   raw: data/raw
   curated: data/curated
   rejected: data/rejected
 
 gcp:
-  project_id: null
+  # Dedicated Google Cloud project created for NullMarket.
+  project_id: nullmarket-retail-de
+
+  # Keep the region explicit so later cloud compute can be placed consistently
+  # with the Cloud Storage bucket where practical.
+  region: northamerica-northeast2
+
   gcs:
-    raw_uri: null
-    curated_uri: null
-    rejected_uri: null
+    # One private bucket holds the logical raw, curated, and rejected layers.
+    bucket: nullmarket-retail-de-data
+
+    # These are object-storage URI prefixes, not traditional filesystem folders.
+    raw_uri: gs://nullmarket-retail-de-data/raw
+    curated_uri: gs://nullmarket-retail-de-data/curated
+    rejected_uri: gs://nullmarket-retail-de-data/rejected
+
   bigquery:
+    # BigQuery is intentionally deferred until Phase 16.
     dataset: null
