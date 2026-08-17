@@ -44,5 +44,5 @@ gcp:
     service_account: nullmarket-spark@nullmarket-retail-de.iam.gserviceaccount.com
 
   bigquery:
-    # BigQuery remains intentionally deferred until Phase 16.
-    dataset: null
+    # Dedicated analytical warehouse dataset created in Phase 16.
+    dataset: nullmarket_warehouse

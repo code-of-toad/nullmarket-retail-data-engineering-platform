@@ -110,3 +110,42 @@ The Spark UI confirms jobs, stages, and tasks executed in the managed cloud batc
 ### Window-operation warnings
 
 Cloud logs contained repeated warnings that some window operations had no partition definition and therefore moved data to a single partition. These warnings are consistent with NullMarket's intentionally global ranking and chronological window calculations. They do not indicate a failed workload, but they identify a scalability consideration: global ordering can become a bottleneck as data volume grows.
+
+## BigQuery Partitioning and Clustering
+
+### Decision
+
+The final BigQuery fact tables use business-date partitioning:
+
+- `fact_sales` is partitioned by `order_date`.
+- `fact_inventory_snapshot` is partitioned by `snapshot_date`.
+
+The business dates are derived deterministically from the existing `date_key`
+relationship to `dim_date.full_date`.
+
+The tables use the following clustering:
+
+- `fact_sales`: `product_key`, then `store_key`
+- `fact_inventory_snapshot`: `store_key`, then `product_key`
+
+### Rationale
+
+Sales requirements repeatedly analyze revenue and margin by product/category
+and store, so `product_key` and `store_key` are defensible clustering fields.
+
+Inventory requirements focus on inventory availability and low-stock analysis
+for store/product combinations, so `store_key` and `product_key` are used.
+
+`category` remains an attribute of `dim_product` rather than being duplicated
+into a fact table solely for clustering.
+
+Partitioning uses business dates rather than ingestion time because analytical
+queries are expected to filter sales by order date and inventory by snapshot
+date.
+
+### Scale Limitation
+
+The NullMarket demonstration dataset is small, so this project does not claim
+measured query-performance or cost improvements from partitioning or
+clustering. The implementation demonstrates a defensible BigQuery physical
+design pattern that becomes more relevant as warehouse volume increases.
