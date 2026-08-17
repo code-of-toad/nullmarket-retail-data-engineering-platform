@@ -1,12 +1,23 @@
-"""Local orchestration entry point for NullMarket Phase 10."""
+"""Environment-aware orchestration entry point for NullMarket Phase 15."""
 
 from __future__ import annotations
 
-# pathlib gives us operating-system-independent project path handling.
+# argparse lets the same orchestration entry point receive runtime storage
+# settings from a managed cloud batch without hard-coding GCS URIs in code.
+import argparse
+
+# pathlib is still useful for locating the repository-local YAML configuration
+# when the pipeline runs on a developer workstation. It is NOT used to model
+# gs:// URIs, because object-storage URIs are not local filesystem paths.
 from pathlib import Path
 
-# PyYAML loads the external configuration established in Phase 5.
-import yaml
+# PyYAML is required for the normal local run. The managed Spark batch can pass
+# its resolved configuration as arguments, which avoids assuming PyYAML exists
+# in Google's prebuilt Spark runtime.
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - exercised only in cloud runtime
+    yaml = None
 
 # SparkSession creates the local Spark application.
 # DataFrame is used for type hints on helper functions.
@@ -23,7 +34,7 @@ from src.data_quality import VALIDATION_REASONS_COLUMN, validate_all_sources
 from src.schemas import SOURCE_SCHEMAS
 
 # Phase 9 owns all transformation/business logic.
-# Phase 10 deliberately reuses these functions instead of duplicating them.
+# Phase 15 deliberately reuses these functions instead of duplicating them.
 from src.transformations import (
     build_daily_revenue_trend,
     build_dim_date,
@@ -45,29 +56,116 @@ from src.transformations import (
 
 
 def load_config(project_root: Path) -> dict:
-    """Load external pipeline configuration."""
+    """Load the repository-local YAML configuration for local/default runs."""
 
-    # Keep environment-specific paths outside processing logic.
-    # This lets the same pipeline later move from local paths to cloud paths
-    # through configuration rather than duplicated transformation code.
+    if yaml is None:
+        raise RuntimeError(
+            "PyYAML is unavailable. Supply explicit --raw-path, --curated-path, "
+            "and --rejected-path arguments for the managed cloud batch."
+        )
+
     config_path = project_root / "config" / "config.yaml"
+    return yaml.safe_load(config_path.read_text(encoding="utf-8"))
 
-    return yaml.safe_load(
-        config_path.read_text(encoding="utf-8")
+
+def create_spark_session(
+    application_name: str,
+    environment: str,
+) -> SparkSession:
+    """Create Spark locally or attach to the master supplied by managed Spark."""
+
+    builder = SparkSession.builder.appName(f"{application_name}-Phase15")
+
+    # A developer workstation must choose a local master explicitly. In GCP,
+    # Managed Service for Apache Spark supplies the cluster/master settings;
+    # overriding them with local[*] would defeat remote execution.
+    if environment == "local":
+        builder = builder.master("local[*]")
+
+    return builder.getOrCreate()
+
+
+def join_storage_path(base: str, *parts: str) -> str:
+    """Join local paths or gs:// URI prefixes without pathlib URI corruption."""
+
+    return "/".join(
+        [base.rstrip("/")]
+        + [part.strip("/") for part in parts if part]
     )
 
 
-def create_spark_session(application_name: str) -> SparkSession:
-    """Create the local Spark session used by the Phase 10 pipeline."""
+def source_file_path(raw_path: str, source_name: str) -> str:
+    """Return the source CSV location for local or Phase 14 GCS layout."""
 
-    return (
-        SparkSession.builder
-        # Give the run a recognizable application name in Spark logs.
-        .appName(f"{application_name}-Phase10")
-        # local[*] uses the available local CPU cores for development.
-        .master("local[*]")
-        .getOrCreate()
-    )
+    # Phase 14 stored each cloud source under raw/<dataset>/<dataset>.csv, while
+    # the local generator writes data/raw/<dataset>.csv. The distinction belongs
+    # in orchestration/storage addressing, not in transformation logic.
+    if raw_path.startswith("gs://"):
+        return join_storage_path(raw_path, source_name, f"{source_name}.csv")
+
+    return join_storage_path(raw_path, f"{source_name}.csv")
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse optional runtime overrides used by the managed cloud batch."""
+
+    parser = argparse.ArgumentParser(description="Run the NullMarket Spark pipeline")
+    parser.add_argument("--environment", choices=("local", "gcp"), default=None)
+    parser.add_argument("--application-name", default=None)
+    parser.add_argument("--raw-path", default=None)
+    parser.add_argument("--curated-path", default=None)
+    parser.add_argument("--rejected-path", default=None)
+    return parser.parse_args()
+
+
+def resolve_runtime_config(
+    project_root: Path,
+    args: argparse.Namespace,
+) -> dict[str, str]:
+    """Resolve runtime values from arguments first, YAML second."""
+
+    # Managed batches are intentionally self-contained: every environment-
+    # specific path can be supplied as a batch argument. Local development can
+    # continue to use config/config.yaml with no command-line changes.
+    if all(
+        value is not None
+        for value in (
+            args.environment,
+            args.application_name,
+            args.raw_path,
+            args.curated_path,
+            args.rejected_path,
+        )
+    ):
+        return {
+            "environment": args.environment,
+            "application_name": args.application_name,
+            "raw_path": args.raw_path,
+            "curated_path": args.curated_path,
+            "rejected_path": args.rejected_path,
+        }
+
+    config = load_config(project_root)
+    environment = args.environment or config.get("environment", "local")
+
+    if environment == "gcp":
+        raw_default = config["gcp"]["gcs"]["raw_uri"]
+        curated_default = config["gcp"]["gcs"]["curated_uri"]
+        rejected_default = config["gcp"]["gcs"]["rejected_uri"]
+    else:
+        # Resolve local paths to absolute strings so Spark receives unambiguous
+        # file locations regardless of the shell's current working directory.
+        raw_default = str(project_root / config["paths"]["raw"])
+        curated_default = str(project_root / config["paths"]["curated"])
+        rejected_default = str(project_root / config["paths"]["rejected"])
+
+    return {
+        "environment": environment,
+        "application_name": args.application_name or config["application"]["name"],
+        "raw_path": args.raw_path or raw_default,
+        "curated_path": args.curated_path or curated_default,
+        "rejected_path": args.rejected_path or rejected_default,
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -77,31 +175,27 @@ def create_spark_session(application_name: str) -> SparkSession:
 
 def read_source(
     spark: SparkSession,
-    raw_path: Path,
+    raw_path: str,
     source_name: str,
 ) -> DataFrame:
-    """Read one CSV source with its Phase 7 explicit schema."""
+    """Read one CSV source from local storage or GCS with its explicit schema."""
 
     return (
         spark.read
-        # Phase 6-generated source CSVs include headers.
         .option("header", "true")
-        # Keep Spark from rearranging fields based on the CSV header.
-        # The explicit StructType remains the source schema contract.
         .option("enforceSchema", "false")
-        # PERMISSIVE allows malformed typed fields to become null so the
-        # Phase 8 validation framework can quarantine them.
         .option("mode", "PERMISSIVE")
-        # Explicit parsing formats make date/timestamp behavior reproducible.
         .option("timestampFormat", "yyyy-MM-dd HH:mm:ss")
         .option("dateFormat", "yyyy-MM-dd")
-        # Never rely on schema inference for the pipeline.
         .schema(SOURCE_SCHEMAS[source_name])
-        .csv(str(raw_path / f"{source_name}.csv"))
+        # Managed Spark's Cloud Storage connector understands gs:// directly.
+        # The transformation layer receives DataFrames and therefore does not
+        # need to know whether these bytes came from disk or object storage.
+        .csv(source_file_path(raw_path, source_name))
     )
 
 
-def write_csv(df: DataFrame, path: Path) -> None:
+def write_csv(df: DataFrame, path: str) -> None:
     """Keep rejected records in the existing inspectable CSV format."""
 
     (
@@ -110,7 +204,7 @@ def write_csv(df: DataFrame, path: Path) -> None:
         # appending duplicate files.
         .mode("overwrite")
         .option("header", "true")
-        .csv(str(path))
+        .csv(path)
     )
 
 
@@ -128,13 +222,13 @@ def prepare_rejected_for_csv(df: DataFrame) -> DataFrame:
 
 def write_parquet(
     df: DataFrame,
-    path: Path,
+    path: str,
     partition_columns: list[str] | None = None,
 ) -> None:
     """Write one curated dataset as Parquet, optionally partitioned."""
 
-    # Phase 10 replaces Phase 9's curated CSV output with Parquet.
-    # overwrite keeps local reruns deterministic by replacing the old dataset.
+    # Curated outputs remain Parquet exactly as established in Phase 10.
+    # overwrite keeps repeated runs deterministic at the selected storage path.
     writer = df.write.mode("overwrite")
 
     # partitionBy() changes the physical directory/file layout only.
@@ -149,26 +243,26 @@ def write_parquet(
         writer = writer.partitionBy(*partition_columns)
 
     # Parquet preserves typed columns and stores data column-wise.
-    writer.parquet(str(path))
+    writer.parquet(path)
 
 
 def read_parquet(
     spark: SparkSession,
-    path: Path,
+    path: str,
 ) -> DataFrame:
     """Read one persisted curated Parquet dataset back from storage."""
 
     # Reading the data back is important: successful write completion alone
     # does not prove that the persisted output still has the expected schema,
     # row count, grain, or calculated values.
-    return spark.read.parquet(str(path))
+    return spark.read.parquet(path)
 
 
 # -----------------------------------------------------------------------------
 # PIPELINE CORRECTNESS CHECKS
 # -----------------------------------------------------------------------------
 # These are runtime correctness guards, not replacements for Phase 12 pytest
-# coverage. Their purpose is to prevent a locally successful pipeline from
+# coverage. Their purpose is to prevent a successful pipeline run from
 # silently producing structurally incorrect curated datasets.
 
 
@@ -388,28 +482,40 @@ def assert_inventory_semantics(
         )
 
 
+def list_storage_children(
+    spark: SparkSession,
+    base_path: str,
+) -> list[str]:
+    """List direct child names through Hadoop FileSystem for local paths or GCS."""
+
+    # Spark already carries the correct filesystem implementations and cloud
+    # credentials. Using Hadoop FileSystem keeps this check storage-agnostic and
+    # avoids local-only pathlib.glob() calls against gs:// URIs.
+    jvm = spark._jvm
+    hadoop_conf = spark._jsc.hadoopConfiguration()
+    path = jvm.org.apache.hadoop.fs.Path(base_path)
+    filesystem = path.getFileSystem(hadoop_conf)
+
+    if not filesystem.exists(path):
+        return []
+
+    return sorted(status.getPath().getName() for status in filesystem.listStatus(path))
+
+
 def assert_partition_layout(
-    curated_path: Path,
+    spark: SparkSession,
+    curated_path: str,
     fact_inventory_snapshot: DataFrame,
 ) -> list[str]:
-    """Verify the intended Phase 10 physical partition layout."""
+    """Verify the intended physical partition layout on local storage or GCS."""
 
-    inventory_path = curated_path / "fact_inventory_snapshot"
+    inventory_path = join_storage_path(curated_path, "fact_inventory_snapshot")
+    inventory_partition_dirs = [
+        name
+        for name in list_storage_children(spark, inventory_path)
+        if name.startswith("date_key=")
+    ]
 
-    # Spark's partitionBy("date_key") creates directories such as:
-    #   date_key=20260101
-    #   date_key=20260115
-    #
-    # Inspect the actual filesystem so this validates physical layout rather
-    # than simply trusting the write configuration.
-    inventory_partition_dirs = sorted(
-        path.name
-        for path in inventory_path.glob("date_key=*")
-        if path.is_dir()
-    )
-
-    # Every distinct inventory snapshot date should correspond to exactly one
-    # top-level date_key partition directory.
     expected_partition_count = (
         fact_inventory_snapshot
         .select("date_key")
@@ -423,14 +529,13 @@ def assert_partition_layout(
             "its distinct date_key count"
         )
 
-    # fact_sales is intentionally NOT physically partitioned in this small demo.
-    # With roughly 1,500 rows spread over roughly 90 dates, date partitioning
-    # would mainly create many tiny directories/files rather than demonstrate a
-    # sensible layout.
+    # fact_sales intentionally remains unpartitioned for this small demo.
+    sales_children = list_storage_children(
+        spark,
+        join_storage_path(curated_path, "fact_sales"),
+    )
     sales_partition_dirs = [
-        path
-        for path in (curated_path / "fact_sales").glob("date_key=*")
-        if path.is_dir()
+        name for name in sales_children if name.startswith("date_key=")
     ]
 
     if sales_partition_dirs:
@@ -442,32 +547,37 @@ def assert_partition_layout(
 
 
 # -----------------------------------------------------------------------------
-# PHASE 10 ORCHESTRATION
+# PHASE 15 ORCHESTRATION — SAME BUSINESS LOGIC, ENVIRONMENT-AWARE STORAGE
 # -----------------------------------------------------------------------------
 
 
 def main() -> None:
-    # src/pipeline.py -> parents[1] resolves to the repository root.
+    # In the repository this file is src/pipeline.py. In a managed batch it can
+    # also be submitted as a standalone driver file with src modules supplied in
+    # a Python zip dependency.
     project_root = Path(__file__).resolve().parents[1]
+    args = parse_args()
+    runtime = resolve_runtime_config(project_root, args)
 
-    # Load paths/application settings from config rather than hard-coding them.
-    config = load_config(project_root)
+    raw_path = runtime["raw_path"]
+    curated_path = runtime["curated_path"]
+    rejected_path = runtime["rejected_path"]
 
-    raw_path = project_root / config["paths"]["raw"]
-    curated_path = project_root / config["paths"]["curated"]
-    rejected_path = project_root / config["paths"]["rejected"]
-
-    # The pipeline entry point owns the Spark lifecycle.
-    spark = create_spark_session(config["application"]["name"])
+    # The orchestration layer owns Spark lifecycle/configuration. In GCP, the
+    # managed service supplies remote driver/executor resources and Spark master.
+    spark = create_spark_session(
+        runtime["application_name"],
+        runtime["environment"],
+    )
     spark.sparkContext.setLogLevel("WARN")
 
     try:
         # ---------------------------------------------------------------------
         # EXISTING PHASE 7-9 LOGIC: INGEST -> VALIDATE -> TRANSFORM
         # ---------------------------------------------------------------------
-        # Phase 10 is a storage-layer phase. We deliberately reuse the already
-        # validated Phase 9 transformation path instead of creating a second
-        # transformation implementation.
+        # Phase 15 reuses the already
+        # validated transformation path instead of creating a cloud-specific
+        # copy of business logic.
 
         # Read all five raw operational datasets with explicit schemas.
         sources = {
@@ -491,12 +601,12 @@ def main() -> None:
         }
 
         # Rejected records remain separately persisted with validation reasons.
-        # Phase 10 changes only the CURATED layer to Parquet; it does not require
-        # us to redesign rejected-record storage.
+        # Cloud execution keeps rejected records separate and inspectable; no
+        # transformation logic is duplicated for GCS.
         for name, result in validation.items():
             write_csv(
                 prepare_rejected_for_csv(result.rejected),
-                rejected_path / name,
+                join_storage_path(rejected_path, name),
             )
 
         # ---------------------------------------------------------------------
@@ -520,7 +630,7 @@ def main() -> None:
         # ---------------------------------------------------------------------
 
         # Build the enriched sales DataFrame from accepted sources.
-        # No order_status filter is introduced here or in Phase 10.
+        # No order_status filter is introduced; the authoritative requirements do not define one.
         sales = build_sales_dataset(
             accepted["orders"],
             accepted["order_items"],
@@ -600,7 +710,7 @@ def main() -> None:
         # ---------------------------------------------------------------------
         # These DataFrames demonstrate aggregation/window functionality.
         # They are not additional warehouse tables and are not persisted as
-        # Phase 10 curated outputs.
+        # authoritative curated outputs.
 
         product_rankings = build_product_rankings(
             fact_sales,
@@ -670,7 +780,7 @@ def main() -> None:
         for name, df in outputs.items():
             write_parquet(
                 df,
-                curated_path / name,
+                join_storage_path(curated_path, name),
                 partitioning.get(name),
             )
 
@@ -685,7 +795,7 @@ def main() -> None:
         persisted = {
             name: read_parquet(
                 spark,
-                curated_path / name,
+                join_storage_path(curated_path, name),
             )
             for name in outputs
         }
@@ -780,6 +890,7 @@ def main() -> None:
         # Inspect the actual filesystem to confirm our intended physical layout:
         # inventory partitioned by date_key, sales left unpartitioned.
         inventory_partition_dirs = assert_partition_layout(
+            spark,
             curated_path,
             persisted["fact_inventory_snapshot"],
         )
@@ -787,11 +898,15 @@ def main() -> None:
         # ---------------------------------------------------------------------
         # EXECUTION REPORTING
         # ---------------------------------------------------------------------
-        # Keep local execution inspectable. These counts make it obvious how many
+        # Keep execution inspectable. These counts make it obvious how many
         # records passed validation and what was written/read back.
 
-        print("\nNullMarket Phase 10 execution summary")
+        print("\nNullMarket Phase 15 execution summary")
         print("=" * 40)
+        print(f"environment: {runtime['environment']}")
+        print(f"raw input: {raw_path}")
+        print(f"curated output: {curated_path}")
+        print(f"rejected output: {rejected_path}")
 
         for name in SOURCE_SCHEMAS:
             accepted_count = validation[name].accepted.count()
@@ -828,7 +943,7 @@ def main() -> None:
         print(f"latest_inventory: rows={latest_inventory.count()}")
         print(f"low_stock_inventory: rows={low_stock_inventory.count()}")
 
-        print("\nPhase 10 pipeline completed successfully.")
+        print("\nPhase 15 pipeline completed successfully.")
 
     finally:
         # Always stop Spark, including when one of the validation guards raises
@@ -838,6 +953,7 @@ def main() -> None:
 
 # Standard Python module entry point:
 # importing src.pipeline will not execute the pipeline,
-# while `python -m src.pipeline` will.
+# while `python -m src.pipeline` will run locally by default. Managed Spark
+# supplies explicit cloud-path arguments when it executes this same entry point.
 if __name__ == "__main__":
     main()
