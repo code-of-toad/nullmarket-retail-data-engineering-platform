@@ -6,6 +6,26 @@ NullMarket is a portfolio-grade batch data engineering platform built around a f
 
 The project is intentionally designed to demonstrate **defensible data engineering decisions** rather than simulated enterprise scale. It includes local and Google-managed Spark execution, rejected-record handling, automated tests, warehouse reconciliation, idempotent repeated processing, and deterministic batch-scoped incremental loading.
 
+## Table of Contents
+
+1. [Project Overview](#1-project-overview)
+2. [Business Problem](#2-business-problem)
+3. [Architecture Diagram](#3-architecture-diagram)
+4. [Technology Stack](#4-technology-stack)
+5. [Source Datasets](#5-source-datasets)
+6. [Data Model](#6-data-model)
+7. [Pipeline Workflow](#7-pipeline-workflow)
+8. [Data-Quality Strategy](#8-data-quality-strategy)
+9. [PySpark Implementation](#9-pyspark-implementation)
+10. [BigQuery Warehouse](#10-bigquery-warehouse)
+11. [SQL Examples](#11-sql-examples)
+12. [Testing](#12-testing)
+13. [Repository Structure](#13-repository-structure)
+14. [Setup Instructions](#14-setup-instructions)
+15. [Design Decisions](#15-design-decisions)
+16. [Scalability Considerations](#16-scalability-considerations)
+17. [Productionization Opportunities](#17-productionization-opportunities)
+
 ## 1. Project Overview
 
 NullMarket demonstrates an end-to-end batch data engineering workflow:
